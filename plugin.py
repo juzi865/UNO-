@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from maibot_sdk import Command, CONFIG_RELOAD_SCOPE_SELF, MaiBotPlugin
 
 from .config import UnoPluginConfig
-from .uno import CardColor, GamePhase, Room, RoomManager
+from .uno import CardColor, GamePhase, Room, RoomManager, UnoAPIServer
 from .uno.engine import GameEngine
 from .uno.player import Player
 from .uno.web_server import UnoWebServer
@@ -26,6 +26,7 @@ class UnoPlugin(MaiBotPlugin):
         self._bot_tasks: Dict[str, asyncio.Task[None]] = {}
         self._cleanup_task: Optional[asyncio.Task[None]] = None
         self._web_server: Optional[UnoWebServer] = None
+        self._api_server: Optional[UnoAPIServer] = None
 
     async def on_load(self) -> None:
         if not self.config.plugin.enabled:
@@ -46,12 +47,26 @@ class UnoPlugin(MaiBotPlugin):
             except OSError as e:
                 self.ctx.logger.warning("Web UI 端口 %s 被占用，跳过启动: %s", self.config.web.port, e)
                 self._web_server = None
+        if self.config.api.enabled:
+            self._api_server = UnoAPIServer(
+                self._room_manager,
+                host=self.config.api.host,
+                port=self.config.api.port,
+            )
+            try:
+                await self._api_server.start()
+            except OSError as e:
+                self.ctx.logger.warning("API 端口 %s 被占用，跳过启动: %s", self.config.api.port, e)
+                self._api_server = None
         self.ctx.logger.info("UNO 插件已加载")
 
     async def on_unload(self) -> None:
         if self._web_server is not None:
             await self._web_server.stop()
             self._web_server = None
+        if self._api_server is not None:
+            await self._api_server.stop()
+            self._api_server = None
         for task in list(self._bot_tasks.values()):
             task.cancel()
         if self._bot_tasks:
@@ -88,31 +103,19 @@ class UnoPlugin(MaiBotPlugin):
             except Exception:
                 pass
 
-    def _extract_ids(self, kwargs: Dict[str, Any]) -> Tuple[str, str, str, str]:
-        stream_id = kwargs.get("stream_id", "")
-        user_id = kwargs.get("user_id", "")
-        group_id = kwargs.get("group_id", "")
-
-        base_info = kwargs.get("message_base_info", {}) or {}
-        if not user_id:
-            user_info = base_info.get("user_info", {}) or {}
-            user_id = str(user_info.get("user_id", ""))
-        if not group_id:
-            group_info = base_info.get("group_info", {}) or {}
-            group_id = str(group_info.get("group_id", ""))
-
-        sender_name = str(base_info.get("sender_name", "") or "")
-        if not sender_name:
-            user_info = base_info.get("user_info", {}) or {}
-            sender_name = str(
-                user_info.get("user_cardname", "")
-                or user_info.get("user_nickname", "")
-                or ""
-            )
-        if not sender_name:
-            sender_name = user_id
-
-        return stream_id, user_id, group_id, sender_name
+    @staticmethod
+    def _extract_sender_name(message_dict: Dict[str, Any], fallback_id: str) -> str:
+        if not isinstance(message_dict, dict):
+            return fallback_id
+        user_info = message_dict.get("message_info", {}).get("user_info", {}) or {}
+        if not isinstance(user_info, dict):
+            return fallback_id
+        name = str(
+            user_info.get("user_cardname", "")
+            or user_info.get("user_nickname", "")
+            or ""
+        )
+        return name or fallback_id
 
     def _can_manage_game(self, room: Room, user_id: str) -> bool:
         if not room:
@@ -607,7 +610,10 @@ class UnoPlugin(MaiBotPlugin):
         **kwargs: Any,
     ) -> Tuple[bool, Optional[str], bool]:
         _ = platform
-        actual_stream, actual_user, actual_group, sender_name = self._extract_ids(kwargs)
+        actual_stream = stream_id
+        actual_user = user_id
+        actual_group = group_id
+        sender_name = self._extract_sender_name(kwargs.get("message", {}), user_id)
 
         action_raw = (matched_groups or {}).get("action", "")
         args_raw = (matched_groups or {}).get("args", "")

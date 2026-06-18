@@ -69,9 +69,20 @@ class GameSummarySection(PluginConfigBase):
     model_task: str = Field(default="replyer", description="AI 总结使用的模型任务名（对应 model_config.toml 中的 model_task_config.* 字段）")
 
 
+class ApiSection(PluginConfigBase):
+    __ui_label__ = "TCP API 服务"
+    __ui_icon__ = "api"
+    __ui_order__ = 5
+
+    enabled: bool = Field(default=False, description="是否启用 TCP API 服务（供 EXE/APK 客户端接入）")
+    host: str = Field(default="127.0.0.1", description="监听地址（建议保持 127.0.0.1）")
+    port: int = Field(default=15811, description="监听端口")
+
+
 class UnoPluginConfig(PluginConfigBase):
     plugin: PluginSection = Field(default_factory=PluginSection)
     game: GameSection = Field(default_factory=GameSection)
     web: WebSection = Field(default_factory=WebSection)
     commentary: CommentarySection = Field(default_factory=CommentarySection)
     game_summary: GameSummarySection = Field(default_factory=GameSummarySection)
+    api: ApiSection = Field(default_factory=ApiSection)
